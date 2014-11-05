@@ -37,6 +37,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 )
 
 type DatacenterID uint64
@@ -329,6 +330,68 @@ func (c *Client) AddPrivateIP(id LinodeID) (string, error) {
 	}
 
 	return response.IPAddress, nil
+}
+
+var ErrJobNotFound = errors.New("Job not found")
+var ErrJobTimedout = errors.New("Job timedout")
+
+// Wait for a job id to complete
+func (c *Client) WaitForJob(id LinodeID, job JobID, sleep, duration time.Duration) error {
+	type jobResponse struct {
+		CompletedTime string      `json:"HOST_FINISH_DT"`
+		HostMessage   string      `json:"HOST_MESSAGE"`
+		Success       interface{} `json:"HOST_SUCCESS"`
+	}
+
+	getJobStatus := func(pending bool) (jobResponse, error) {
+		var jobs []jobResponse
+
+		p := c.newCall("linode.job.list")
+		p.Set("LinodeID", strconv.FormatUint(uint64(id), 10))
+		p.Set("JobID", strconv.FormatUint(uint64(job), 10))
+		if pending {
+			p.Set("pendingOnly", "1")
+		}
+		if err := processAPICall(p, &jobs); err != nil {
+			return jobResponse{}, err
+		}
+
+		// check results
+		if len(jobs) != 1 {
+			return jobResponse{}, ErrJobNotFound
+		}
+
+		return jobs[0], nil
+	}
+
+	// wait for job to complete
+	expires := time.Now().Add(duration)
+	for {
+		if time.Now().After(expires) {
+			return ErrJobTimedout
+		}
+
+		_, err := getJobStatus(true)
+		if err == ErrJobNotFound {
+			break
+		} else if err != nil {
+			return err
+		}
+
+		time.Sleep(sleep)
+	}
+
+	// check status of the job
+	resp, err := getJobStatus(false)
+	if err != nil {
+		return err
+	}
+
+	if f, ok := resp.Success.(float64); !ok || int64(f) != 1 {
+		return fmt.Errorf("Job failed: %q", resp.HostMessage)
+	}
+
+	return nil
 }
 
 // run a Linode API function and parse its result
