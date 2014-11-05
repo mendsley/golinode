@@ -332,6 +332,31 @@ func (c *Client) AddPrivateIP(id LinodeID) (string, error) {
 	return response.IPAddress, nil
 }
 
+// Find the first public IP for Linode
+func (c *Client) GetPublicIP(id LinodeID) (string, error) {
+	type ipResponse struct {
+		Public  int    `json:"ISPUBLIC"`
+		Address string `json:"IPADDRESS"`
+	}
+
+	var ips []ipResponse
+
+	p := c.newCall("linode.ip.list")
+	p.Set("LinodeID", strconv.FormatUint(uint64(id), 10))
+	if err := processAPICall(p, &ips); err != nil {
+		return "", err
+	}
+
+	// find a public ip
+	for ii := range ips {
+		if ips[ii].Public != 0 {
+			return ips[ii].Address, nil
+		}
+	}
+
+	return "", nil
+}
+
 var ErrJobNotFound = errors.New("Job not found")
 var ErrJobTimedout = errors.New("Job timedout")
 
